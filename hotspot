@@ -1,6 +1,6 @@
 #!/bin/bash
 # Concurrent AP+STA on a single-radio Wi-Fi adapter: add an ap0 vif pinned to wlan0's channel.
-# Full rationale + walkthrough: see hotspotConcurrent.md
+# Full rationale + walkthrough: see README.md
 #
 #   hotspot up [--name X] [--pass Y]   bring the hotspot up
 #   hotspot down                        tear it down, leave the Wi-Fi link alone
@@ -67,7 +67,7 @@ esac
 SSID=""   # empty = keep whatever the profile already has
 PASS=""   # empty = keep whatever the profile already has
 
-# arg parsing (see hotspotConcurrent.md): flags in any order
+# arg parsing (see README.md): flags in any order
 while [ $# -gt 0 ]; do
     case $1 in
         --name)     SSID=$2; shift 2 ;;
