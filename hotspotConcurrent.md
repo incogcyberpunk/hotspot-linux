@@ -8,10 +8,10 @@
 
 ## 1. The problem
 
-I have **one** Wi-Fi radio (`wlan0`, backed by a MediaTek **MT7663** chip on the
-`mt7615e` driver, exposed as `phy0`). I want it to do two things *at once*:
+This laptop has **one** Wi-Fi radio (`wlan0`, backed by a MediaTek **MT7663** chip on the
+`mt7615e` driver, exposed as `phy0`). It needs to do two things *at once*:
 
-1. Stay connected to my home Wi-Fi (`aayush_5G`) as a **client** — this is the uplink.
+1. Stay connected to the home Wi-Fi (`aayush_5G`) as a **client** — this is the uplink.
 2. Broadcast a **hotspot** that shares that uplink to other devices.
 
 NetworkManager's built-in "Turn on hotspot" button **cannot** do this on one radio.
@@ -38,7 +38,7 @@ Same physical interface, silently repurposed. The uplink is gone.
 
 ---
 
-## 2. Key concepts (for the intermediate dev I'll be in a year)
+## 2. Key concepts (for the intermediate reader)
 
 ### (a) A `phy` is the radio; a `netdev` is a virtual interface on top of it
 
@@ -55,7 +55,7 @@ all share the one physical radio underneath (and therefore its constraints — s
         phy0  (MT7663 radio, mt7615e driver)
         │
         ├── wlan0   type managed  (station / client → aayush_5G)
-        └── ap0     type AP       (our hotspot)
+        └── ap0     type AP       (the hotspot)
 ```
 
 ### (b) 802.11 interface modes
@@ -111,8 +111,8 @@ byte 0:  b7 b6 b5 b4 b3 b2 b1 b0
 
 The **U/L bit** (value `0x02`) says whether the address is a real vendor-burned address
 (bit = 0) or a locally-invented one (bit = 1). The IEEE guarantees it will **never** assign a
-real vendor an address with this bit set. So if we take the station's real MAC and **XOR
-byte 0 with `0x02`**, we flip that bit and get an address that:
+real vendor an address with this bit set. So taking the station's real MAC and **XORing
+byte 0 with `0x02`** flips that bit and yields an address that:
 
 - differs from the station's (no collision), and
 - can **never** clash with any real hardware on the network.
@@ -120,9 +120,9 @@ byte 0 with `0x02`**, we flip that bit and get an address that:
 Station `9c:2f:9d:8b:2c:1d` → AP `9e:2f:9d:8b:2c:1d`
 (`0x9c ^ 0x02 = 0x9e`; the rest is untouched).
 
-**Deterministic derivation beats random.** Because we always derive the same AP MAC from the
-same station MAC, clients see a **stable BSSID** across restarts — they reconnect cleanly
-instead of treating each restart as a brand-new network.
+**Deterministic derivation beats random.** Because the script always derives the same AP MAC
+from the same station MAC, clients see a **stable BSSID** across restarts — they reconnect
+cleanly instead of treating each restart as a brand-new network.
 
 ### (f) `ipv4.method=shared` — what NM actually does for a hotspot
 
@@ -133,7 +133,7 @@ The `Hotspot` NM profile uses `ipv4.method=shared`, which makes NetworkManager:
 - install **NAT masquerade** so client traffic is routed out via the default route.
 
 The masquerade is the piece that needs a working uplink. With NM's built-in hotspot the
-uplink is gone, so the masquerade has nowhere to go → IP but no internet. With our script the
+uplink is gone, so the masquerade has nowhere to go → IP but no internet. With this script the
 uplink (`wlan0`) is still up, so masquerade works.
 
 ---
@@ -190,8 +190,8 @@ set -e
   section needs `|| true` — see below.)
 - **`[ "$EUID" -eq 0 ] || exec sudo -- "$0" "$@"`** — self-re-exec as root.
   - `$EUID` is the effective user id; `0` is root.
-  - If **not** root, the `||` fires and we **`exec sudo`** — replacing the current process
-    image (no child, no return) with the same script under sudo.
+  - If **not** root, the `||` fires and the script **`exec sudo`**s — replacing the current
+    process image (no child, no return) with the same script under sudo.
   - `--` ends sudo's own option parsing so a weird `$1` (e.g. `--name`) isn't eaten by sudo.
   - `"$0" "$@"` re-passes the script path and **all original arguments** verbatim.
   - Net effect: run it as a normal user and it silently elevates itself once.
@@ -258,8 +258,8 @@ FREQ=$(iw dev wlan0 link | awk '/freq:/ {print $2}')
 ```
 
 - **`CH`** from `iw dev wlan0 info` — the current channel number (e.g. `36`). If `wlan0` is
-  **not** associated, this line comes back **empty**, which is how we detect the disconnected
-  case below.
+  **not** associated, this line comes back **empty**, which is how the script detects the
+  disconnected case below.
 - **`FREQ`** from `iw dev wlan0 link` — the operating frequency in MHz. `iw link` reports it
   with a **decimal**, e.g. `5180.0`.
 
@@ -271,7 +271,7 @@ if [ -n "$CH" ]; then
     ...
 ```
 
-- **`-n "$CH"`** — non-empty channel ⇒ station is associated ⇒ we must match its channel.
+- **`-n "$CH"`** — non-empty channel ⇒ station is associated ⇒ the AP must match its channel.
 - **`${FREQ%%.*}`** — parameter expansion: `%%.*` strips the **longest** trailing match of
   `.*`, turning `5180.0` into `5180`. **Why it's required:** `[` does integer comparison, and
   `[ 5180.0 -ge 5000 ]` throws **`integer expression expected`** — a non-zero exit that under
@@ -324,7 +324,7 @@ iw dev "$STATION" interface add "$AP" type __ap addr "$MAC"
 
 - First line: delete any **stale `ap0`** from a previous run (cleanup-hygiene idiom again).
 - **`iw dev wlan0 interface add ap0 type __ap addr <MAC>`** — ask the *station's phy* to
-  create a **new vif** named `ap0` in **AP mode**, with our derived MAC.
+  create a **new vif** named `ap0` in **AP mode**, with the derived MAC.
   - **`type __ap`** — `iw`'s literal token for access-point mode. The double underscore is
     just `iw`'s naming (`__ap`, `__managed`, …) for the raw nl80211 interface types; it means
     "AP". Adding it on the *station's* phy is what makes the two vifs share the one radio.
