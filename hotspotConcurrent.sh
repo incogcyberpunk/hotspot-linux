@@ -2,30 +2,72 @@
 # Concurrent AP+STA on a single-radio Wi-Fi adapter: add an ap0 vif pinned to wlan0's channel.
 # Full rationale + walkthrough: see hotspotConcurrent.md
 #
-#   hotspotConcurrent.sh                              up, keep saved SSID/password
-#   hotspotConcurrent.sh [up] "MyNet"                 up, set SSID
-#   hotspotConcurrent.sh [up] --name "MyNet"          same, explicit flag
-#   hotspotConcurrent.sh [up] --pass "secret123"      up, set password
-#   hotspotConcurrent.sh [up] --name "N" --pass "P"   set both (flags any order)
-#   hotspotConcurrent.sh down                         tear down, leave the Wi-Fi link alone
+#   hotspotConcurrent.sh up [--name X] [--pass Y]   bring the hotspot up
+#   hotspotConcurrent.sh down                        tear it down, leave the Wi-Fi link alone
+#   hotspotConcurrent.sh [status]                    show status (QR on top, stats below)
 set -e
 [ "$EUID" -eq 0 ] || exec sudo -- "$0" "$@"   # re-exec as root if needed
 
 STATION=wlan0
 AP=ap0
 PROFILE=Hotspot
-SSID=""   # empty = keep whatever the profile already has
-PASS=""   # empty = keep whatever the profile already has
 
-if [ "$1" = down ]; then
+CMD=${1:-status}   # no arg = status
+[ $# -gt 0 ] && shift
+
+# --- shared: print the join QR for the profile's effective SSID/password ---
+print_qr() {   # $1=ssid $2=pass
+    command -v qrencode >/dev/null || return 0
+    esc() { printf '%s' "$1" | sed 's/[\\;,:"]/\\&/g'; }
+    qrencode -m 1 -t UTF8 "WIFI:T:WPA;S:$(esc "$1");P:$(esc "$2");;"
+}
+
+case $CMD in
+down)
     nmcli con down "$PROFILE" 2>/dev/null || true   # cleanup hygiene: ignore "not active"
     iw dev "$AP" del 2>/dev/null || true            # cleanup hygiene: ignore "no such dev"
     echo "hotspot down, $STATION untouched"
     exit 0
-fi
+    ;;
 
-# arg parsing (see hotspotConcurrent.md): optional "up", then flags in any order
-[ "$1" = up ] && shift
+status)
+    SSID=$(nmcli -g 802-11-wireless.ssid con show "$PROFILE" 2>/dev/null)
+    if iw dev "$AP" info >/dev/null 2>&1; then
+        # AP vif exists -> hotspot is up. QR on top, stats below.
+        PASS=$(nmcli -s -g 802-11-wireless-security.psk con show "$PROFILE" 2>/dev/null)
+        ACH=$(iw dev "$AP" info | awk '/channel/ {print $2}')
+        NCLIENTS=$(iw dev "$AP" station dump 2>/dev/null | grep -c '^Station') || true  # 0 matches = exit 1
+        IP=$(ip -4 -o addr show "$AP" 2>/dev/null | awk '{print $4}')
+        print_qr "$SSID" "$PASS"
+        echo
+        printf '  %-10s %s\n' "status"  "UP"
+        printf '  %-10s %s\n' "ssid"    "$SSID"
+        printf '  %-10s %s\n' "password" "$PASS"
+        printf '  %-10s %s\n' "channel" "$ACH"
+        printf '  %-10s %s\n' "address" "${IP:-none}"
+        printf '  %-10s %s\n' "clients" "${NCLIENTS:-0}"
+    else
+        echo "hotspot is down"
+        echo "  ssid    ${SSID:-<none saved>}"
+        echo
+        echo "start it with:"
+        echo "  hotspotConcurrent.sh up [--name <SSID>] [--pass <password>]"
+    fi
+    exit 0
+    ;;
+
+up) : ;;   # fall through to bring-up below
+*)
+    echo "usage: hotspotConcurrent.sh {up [--name X] [--pass Y] | down | status}" >&2
+    exit 1
+    ;;
+esac
+
+# ---- bring-up (CMD = up) ----
+SSID=""   # empty = keep whatever the profile already has
+PASS=""   # empty = keep whatever the profile already has
+
+# arg parsing (see hotspotConcurrent.md): flags in any order
 while [ $# -gt 0 ]; do
     case $1 in
         --name)     SSID=$2; shift 2 ;;
@@ -75,12 +117,8 @@ nmcli con up "$PROFILE"
 echo "--- result: expect $STATION=managed and $AP=AP on channel $CH ---"
 iw dev | grep -E 'Interface|ssid|type|channel'   # verify two vifs, same channel
 
-# QR to join: read the effective SSID/password back from the profile (handles "kept existing"),
-# escape the Wi-Fi-URI special chars (\ ; , : "), render with the installed qrencode.
-if command -v qrencode >/dev/null; then
-    QSSID=$(nmcli -g 802-11-wireless.ssid con show "$PROFILE")
-    QPASS=$(nmcli -s -g 802-11-wireless-security.psk con show "$PROFILE")
-    esc() { printf '%s' "$1" | sed 's/[\\;,:"]/\\&/g'; }
-    echo "--- scan to join \"$QSSID\" ---"
-    qrencode -m 1 -t UTF8 "WIFI:T:WPA;S:$(esc "$QSSID");P:$(esc "$QPASS");;"
-fi
+# join QR: read the effective SSID/password back from the profile (handles "kept existing")
+QSSID=$(nmcli -g 802-11-wireless.ssid con show "$PROFILE")
+QPASS=$(nmcli -s -g 802-11-wireless-security.psk con show "$PROFILE")
+echo "--- scan to join \"$QSSID\" ---"
+print_qr "$QSSID" "$QPASS"
