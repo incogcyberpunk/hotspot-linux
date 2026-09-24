@@ -24,8 +24,19 @@ fi
 
 CH=$(iw dev wlan0 info | awk '/channel/ {print $2}')
 FREQ=$(iw dev wlan0 link | awk '/freq:/ {print $2}')
-[ "${FREQ%% *}" -ge 5000 ] && BAND=a || BAND=bg
-echo "$STATION is on channel $CH (${FREQ%% *} MHz) -> pinning $AP to the same channel, band $BAND"
+
+if [ -n "$CH" ]; then
+    # Station is associated: must share its channel (single-channel radio).
+    [ "${FREQ%% *}" -ge 5000 ] && BAND=a || BAND=bg
+    echo "$STATION is on channel $CH (${FREQ%% *} MHz) -> pinning $AP to the same channel, band $BAND"
+else
+    # Not associated: no channel to match, so any legal one works. The hotspot
+    # comes up with no uplink -- clients get an IP but no internet until $STATION
+    # connects to something.
+    CH=6
+    BAND=bg
+    echo "$STATION not connected -- creating hotspot without internet on channel $CH, band $BAND"
+fi
 
 # The second vif needs its own address: flip the locally-administered bit of
 # byte 0 so it can't collide with the station interface.
