@@ -1,4 +1,4 @@
-# `hotspotConcurrent.sh` — Concurrent Wi-Fi AP + Station on a single-radio adapter
+# `hotspot` — Concurrent Wi-Fi AP + Station on a single-radio adapter
 
 > Long-term memory doc. The script is intentionally terse; **this file is the real
 > explanation** — the networking, the kernel/driver constraints, and the bash mechanics.
@@ -429,21 +429,24 @@ station interface still `type managed`, the AP vif `type AP`, **both on the same
 
 ## 6. Usage examples
 
-All of these elevate to root automatically via the self-re-exec. `SSID`/password default to
+The first argument is a **subcommand** — `up`, `down`, or `status` (bare command = `status`).
+All elevate to root automatically via the self-re-exec. On `up`, SSID/password default to
 **keeping the profile's saved values** when not passed.
 
 | Command | Effect |
 |---|---|
-| `hotspotConcurrent.sh` | up, keep saved SSID + password |
-| `hotspotConcurrent.sh up` | up, keep saved SSID + password |
-| `hotspotConcurrent.sh up "MyNet"` | up, set SSID `MyNet`, keep password |
-| `hotspotConcurrent.sh up --name "MyNet"` | up, set SSID `MyNet` (explicit flag) |
-| `hotspotConcurrent.sh "MyNet"` | up, set SSID `MyNet` (bare positional) |
-| `hotspotConcurrent.sh --name "MyNet"` | up, set SSID (flag, no `up`) |
-| `hotspotConcurrent.sh up --pass "secret123"` | up, set password, keep SSID |
-| `hotspotConcurrent.sh up --name "N" --pass "P"` | set both (flags in any order) |
-| `hotspotConcurrent.sh --name=N --pass=P` | set both (`--flag=value` form) |
-| `hotspotConcurrent.sh down` | tear down the AP vif + profile, leave the station alone |
+| `hotspot` | show status (QR + stats if up; "down" + start hint if not) |
+| `hotspot status` | same as bare `hotspot` |
+| `hotspot up` | up, keep saved SSID + password |
+| `hotspot up "MyNet"` | up, set SSID `MyNet`, keep password |
+| `hotspot up --name "MyNet"` | up, set SSID `MyNet` (explicit flag) |
+| `hotspot up --pass "secret123"` | up, set password, keep SSID |
+| `hotspot up --name "N" --pass "P"` | set both (flags in any order) |
+| `hotspot up --name=N --pass=P` | set both (`--flag=value` form) |
+| `hotspot down` | tear down the AP vif + profile, leave the station alone |
+
+Anything else (`hotspot foo`, a bare `--name`, etc.) prints a usage error — `up` is required
+to start the hotspot; it is no longer implicit.
 
 ---
 

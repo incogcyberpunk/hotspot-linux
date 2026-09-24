@@ -2,9 +2,9 @@
 # Concurrent AP+STA on a single-radio Wi-Fi adapter: add an ap0 vif pinned to wlan0's channel.
 # Full rationale + walkthrough: see hotspotConcurrent.md
 #
-#   hotspotConcurrent.sh up [--name X] [--pass Y]   bring the hotspot up
-#   hotspotConcurrent.sh down                        tear it down, leave the Wi-Fi link alone
-#   hotspotConcurrent.sh [status]                    show status (QR on top, stats below)
+#   hotspot up [--name X] [--pass Y]   bring the hotspot up
+#   hotspot down                        tear it down, leave the Wi-Fi link alone
+#   hotspot [status]                    show status (QR on top, stats below)
 set -e
 [ "$EUID" -eq 0 ] || exec sudo -- "$0" "$@"   # re-exec as root if needed
 
@@ -51,14 +51,14 @@ status)
         echo "  ssid    ${SSID:-<none saved>}"
         echo
         echo "start it with:"
-        echo "  hotspotConcurrent.sh up [--name <SSID>] [--pass <password>]"
+        echo "  hotspot up [--name <SSID>] [--pass <password>]"
     fi
     exit 0
     ;;
 
 up) : ;;   # fall through to bring-up below
 *)
-    echo "usage: hotspotConcurrent.sh {up [--name X] [--pass Y] | down | status}" >&2
+    echo "usage: hotspot {up [--name X] [--pass Y] | down | status}" >&2
     exit 1
     ;;
 esac
