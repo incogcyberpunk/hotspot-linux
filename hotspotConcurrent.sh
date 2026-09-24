@@ -74,3 +74,13 @@ nmcli con up "$PROFILE"
 
 echo "--- result: expect $STATION=managed and $AP=AP on channel $CH ---"
 iw dev | grep -E 'Interface|ssid|type|channel'   # verify two vifs, same channel
+
+# QR to join: read the effective SSID/password back from the profile (handles "kept existing"),
+# escape the Wi-Fi-URI special chars (\ ; , : "), render with the installed qrencode.
+if command -v qrencode >/dev/null; then
+    QSSID=$(nmcli -g 802-11-wireless.ssid con show "$PROFILE")
+    QPASS=$(nmcli -s -g 802-11-wireless-security.psk con show "$PROFILE")
+    esc() { printf '%s' "$1" | sed 's/[\\;,:"]/\\&/g'; }
+    echo "--- scan to join \"$QSSID\" ---"
+    qrencode -m 1 -t UTF8 "WIFI:T:WPA;S:$(esc "$QSSID");P:$(esc "$QPASS");;"
+fi
