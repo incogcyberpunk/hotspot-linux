@@ -136,6 +136,44 @@ The masquerade is the piece that needs a working uplink. With NM's built-in hots
 uplink is gone, so the masquerade has nowhere to go → IP but no internet. With this script the
 uplink (`wlan0`) is still up, so masquerade works.
 
+### (g) The shared channel is *not* the internet path (a common confusion)
+
+It's tempting to think that once `ap0` and `wlan0` share a channel, the internet somehow
+"flows through the common channel." It doesn't. These are **two separate mechanisms**, at two
+different layers, and conflating them hides how the traffic actually moves:
+
+- **Same channel = coexistence (layer 1/2).** The shared channel is only what lets the two
+  vifs exist on one radio at all — it satisfies `#channels <= 1` (see §c). It is a
+  *precondition*, not a data path. It carries no client's internet traffic by itself.
+- **Routing + NAT = internet (layer 3).** A client's packet is *forwarded between two distinct
+  interfaces* by the kernel, exactly as it would be between an Ethernet port and a Wi-Fi port:
+
+```
+phone ──▶ ap0 (10.42.0.1) ──route──▶ NAT/masquerade ──▶ wlan0 ──▶ router ──▶ internet
+          └──────── same radio, same channel ────────┘   └──── the real uplink ────┘
+```
+
+Step by step: a packet arrives at `ap0`; the kernel **routes** it (destination is the wider
+internet, so it follows the default route out `wlan0`); `ipv4.method=shared` **NATs** it so
+the source `10.42.0.x` is rewritten as `wlan0`'s address; the router replies to `wlan0`; the
+reply is un-NATed and delivered back to the client via `ap0`. The shared channel is nowhere in
+that chain — it's just what keeps both interfaces *alive at the same instant* so forwarding
+between them is possible.
+
+Two facts make the separation obvious:
+
+- **Same channel, no uplink → no internet.** In the disconnected case (`wlan0` not
+  associated), the two vifs still coexist on one channel perfectly, but clients get an IP and
+  *no internet* — because there is no route out and nothing to NAT toward.
+- **Different channels *can* still bridge internet.** A router with two separate radios shares
+  internet across *different* channels. So "same channel" is neither necessary nor sufficient
+  for internet; **uplink + routing + NAT** is what delivers it.
+
+> **Throughput cost.** Because `ap0` and `wlan0` share **one radio on one channel**, they also
+> share the airtime: the uplink traffic and the hotspot's client traffic take turns on the
+> same frequency. Expect roughly **half** the throughput of a dedicated AP. This is a
+> performance cost of single-radio concurrency, not a connectivity problem.
+
 ---
 
 ## 3. Windows does this out of the box — why doesn't Linux?
