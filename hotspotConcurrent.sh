@@ -27,8 +27,8 @@ FREQ=$(iw dev wlan0 link | awk '/freq:/ {print $2}')
 
 if [ -n "$CH" ]; then
     # Station is associated: must share its channel (single-channel radio).
-    [ "${FREQ%% *}" -ge 5000 ] && BAND=a || BAND=bg
-    echo "$STATION is on channel $CH (${FREQ%% *} MHz) -> pinning $AP to the same channel, band $BAND"
+    [ "${FREQ%%.*}" -ge 5000 ] && BAND=a || BAND=bg
+    echo "$STATION is on channel $CH (${FREQ%%.*} MHz) -> pinning $AP to the same channel, band $BAND"
 else
     # Not associated: no channel to match, so any legal one works. The hotspot
     # comes up with no uplink -- clients get an IP but no internet until $STATION
