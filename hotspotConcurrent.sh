@@ -1,5 +1,13 @@
 #!/bin/bash
-# Concurrent AP+STA: add a second vif and hand it to the existing Hotspot profile.
+# Concurrent AP+STA on the MT7663 (mt7615e): add a second vif pinned to wlan0's
+# current channel, since the chip allows many interfaces but only one channel.
+#
+#   hotspotConcurrent.sh        bring the hotspot up alongside the Wi-Fi link
+#   hotspotConcurrent.sh down   tear it down, leave the Wi-Fi link alone
+#
+# ponytail: the channel is read once at activation. If the router moves channel
+# while the hotspot is up, the AP goes deaf and you must re-run this. Following
+# it live would need a netlink listener on CH_SWITCH events.
 set -e
 [ "$EUID" -eq 0 ] || exec sudo -- "$0" "$@"
 
