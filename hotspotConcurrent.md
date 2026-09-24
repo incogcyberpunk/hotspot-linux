@@ -1,4 +1,4 @@
-# `hotspotConcurrent.sh` — Concurrent Wi-Fi AP + Station on a single-radio MT7663
+# `hotspotConcurrent.sh` — Concurrent Wi-Fi AP + Station on a single-radio adapter
 
 > Long-term memory doc. The script is intentionally terse; **this file is the real
 > explanation** — the networking, the kernel/driver constraints, and the bash mechanics.
@@ -8,10 +8,10 @@
 
 ## 1. The problem
 
-This laptop has **one** Wi-Fi radio (`wlan0`, backed by a MediaTek **MT7663** chip on the
-`mt7615e` driver, exposed as `phy0`). It needs to do two things *at once*:
+This laptop has **one** Wi-Fi radio (`wlan0`, a single wireless adapter exposed as `phy0`).
+It needs to do two things *at once*:
 
-1. Stay connected to the home Wi-Fi (`aayush_5G`) as a **client** — this is the uplink.
+1. Stay connected to an upstream Wi-Fi network as a **client** — this is the uplink.
 2. Broadcast a **hotspot** that shares that uplink to other devices.
 
 NetworkManager's built-in "Turn on hotspot" button **cannot** do this on one radio.
@@ -28,8 +28,8 @@ NM installed has no upstream route anymore. `wlan0` is no longer talking to the 
 
 | | Type | Channel | Band | Role |
 |---|---|---|---|---|
-| **Before** (client) | `managed` | 36 | 5 GHz | connected to `aayush_5G` |
-| **After** NM hotspot | `AP` | 6 | 2.4 GHz | broadcasting `Hotspot-Incog` |
+| **Before** (client) | `managed` | 36 | 5 GHz | connected to the upstream network |
+| **After** NM hotspot | `AP` | 6 | 2.4 GHz | broadcasting the hotspot SSID |
 
 Same physical interface, silently repurposed. The uplink is gone.
 
@@ -42,8 +42,8 @@ Same physical interface, silently repurposed. The uplink is gone.
 
 ### (a) A `phy` is the radio; a `netdev` is a virtual interface on top of it
 
-- A **phy** (e.g. `phy0`) is the physical radio — the actual MT7663 chip + antennas,
-  driven by `mt7615e`. There is exactly one here.
+- A **phy** (e.g. `phy0`) is the physical radio — the actual wireless chip + antennas. There
+  is exactly one here.
 - A **netdev** / **vif** (virtual interface) is a software interface layered on a phy —
   `wlan0`, `ap0`, etc. One phy can host **multiple** netdevs, and each can be in a
   **different 802.11 mode**.
@@ -52,9 +52,9 @@ So "one radio" does *not* mean "one interface". The chip can present several vif
 all share the one physical radio underneath (and therefore its constraints — see (c)).
 
 ```
-        phy0  (MT7663 radio, mt7615e driver)
+        phy0  (wireless radio)
         │
-        ├── wlan0   type managed  (station / client → aayush_5G)
+        ├── wlan0   type managed  (station / client → upstream network)
         └── ap0     type AP       (the hotspot)
 ```
 
@@ -117,8 +117,8 @@ byte 0 with `0x02`** flips that bit and yields an address that:
 - differs from the station's (no collision), and
 - can **never** clash with any real hardware on the network.
 
-Station `9c:2f:9d:8b:2c:1d` → AP `9e:2f:9d:8b:2c:1d`
-(`0x9c ^ 0x02 = 0x9e`; the rest is untouched).
+Station `<octet0>:xx:xx:xx:xx:xx` → AP `<octet0 ⊕ 0x02>:xx:xx:xx:xx:xx`
+(e.g. `0x40 ^ 0x02 = 0x42`; the rest of the address is untouched).
 
 **Deterministic derivation beats random.** Because the script always derives the same AP MAC
 from the same station MAC, clients see a **stable BSSID** across restarts — they reconnect
@@ -232,23 +232,48 @@ harmless "already gone". Drop `2>/dev/null` and it works but spams errors. You w
 
 ### Argument parsing
 
+An optional leading `up` is shifted off, then a `while`/`case` loop consumes flags in any
+order:
+
 ```bash
 [ "$1" = up ] && shift
-[ "$1" = --name ] && shift
-[ -n "$1" ] && SSID=$1
+while [ $# -gt 0 ]; do
+    case $1 in
+        --name)     SSID=$2; shift 2 ;;
+        --name=*)   SSID=${1#*=}; shift ;;
+        --pass|--password)  PASS=$2; shift 2 ;;
+        --pass=*)   PASS=${1#*=}; shift ;;
+        --password=*)       PASS=${1#*=}; shift ;;
+        -*)         echo "unknown flag: $1" >&2; exit 1 ;;
+        *)          SSID=$1; shift ;;
+    esac
+done
 ```
 
-Permissive parsing so all these forms work:
+- **`while [ $# -gt 0 ]`** — loop while any arguments remain (`$#` is the count).
+- **`shift 2`** — a flag that takes a value drops **both** the flag and its value in one step.
+- **`--name=*` / `--pass=*`** — the `--flag=value` form; `${1#*=}` strips up to the first `=`,
+  leaving just the value.
+- **`-*)`** — any unrecognised flag is a hard error rather than being silently swallowed.
+- **`*)`** — a bare word (no leading `-`) is taken as the SSID.
 
-- **optional leading `up`** — if `$1` is `up`, `shift` drops it. (Bare invocation with no `up`
-  also works because this line just no-ops.)
-- **optional `--name`** — if the (now-first) arg is `--name`, `shift` drops it, leaving the
-  SSID as the next positional.
-- **positional SSID** — if anything is left in `$1`, use it as the SSID; otherwise keep the
-  default `Hotspot-Incog`.
+`SSID` and `PASS` both default to **empty**, meaning *keep whatever the profile already has* —
+so `up` with no flags reuses the saved network name and password. This is why `up`,
+`up "MyNet"`, `up --name "MyNet"`, `--pass "secret123"`, `--name=N --pass=P`, etc. all resolve
+correctly (see §6).
 
-This is why `up`, `up "MyNet"`, `up --name "MyNet"`, `"MyNet"`, and `--name "MyNet"` all land
-on the right SSID (see §6).
+**Password length is validated at the boundary:**
+
+```bash
+if [ -n "$PASS" ] && { [ "${#PASS}" -lt 8 ] || [ "${#PASS}" -gt 63 ]; }; then
+    echo "password must be 8-63 characters (got ${#PASS})" >&2
+    exit 1
+fi
+```
+
+WPA2-PSK requires **8–63 characters**. `${#PASS}` is the string length. Checking here means a
+bad password fails with a clear message *before* `nmcli` is touched, instead of surfacing as a
+cryptic activation error later.
 
 ### Reading the station's channel and frequency
 
@@ -302,17 +327,17 @@ BASE=$(cat "/sys/class/net/$STATION/address")
 MAC=$(printf '%02x%s' "$(( 0x${BASE%%:*} ^ 2 ))" "${BASE#??}")
 ```
 
-- **`BASE`** — the station's real MAC read straight from sysfs, e.g. `9c:2f:9d:8b:2c:1d`.
-- **`${BASE%%:*}`** — strip the longest trailing `:*`, leaving just the **first octet**: `9c`.
-- **`0x${BASE%%:*}`** → `0x9c`, so bash treats it as **hex** in arithmetic.
-- **`$(( 0x9c ^ 2 ))`** — arithmetic **XOR** with `2` (`0x02`, the U/L bit). `0x9c ^ 0x02`
-  = `0x9e` = decimal `158`.
+- **`BASE`** — the station's real MAC read straight from sysfs, e.g. `40:aa:bb:cc:dd:ee`.
+- **`${BASE%%:*}`** — strip the longest trailing `:*`, leaving just the **first octet**: `40`.
+- **`0x${BASE%%:*}`** → `0x40`, so bash treats it as **hex** in arithmetic.
+- **`$(( 0x40 ^ 2 ))`** — arithmetic **XOR** with `2` (`0x02`, the U/L bit). `0x40 ^ 0x02`
+  = `0x42` = decimal `66`.
 - **`${BASE#??}`** — strip the **shortest** leading two chars (`??` = the two hex digits of
-  octet 0), leaving `:2f:9d:8b:2c:1d`. (It keeps the leading colon.)
-- **`printf '%02x%s'`** — format the XORed octet as **two lowercase hex digits** (`9e`), then
-  append the rest verbatim → `9e:2f:9d:8b:2c:1d`.
+  octet 0), leaving `:aa:bb:cc:dd:ee`. (It keeps the leading colon.)
+- **`printf '%02x%s'`** — format the XORed octet as **two lowercase hex digits** (`42`), then
+  append the rest verbatim → `42:aa:bb:cc:dd:ee`.
 
-So `9c:2f:9d:8b:2c:1d` → `9e:2f:9d:8b:2c:1d`, a stable, locally-administered, collision-free
+So `40:aa:bb:cc:dd:ee` → `42:aa:bb:cc:dd:ee`, a stable, locally-administered, collision-free
 BSSID (see §2d/§2e).
 
 ### Creating the AP vif
@@ -332,19 +357,22 @@ iw dev "$STATION" interface add "$AP" type __ap addr "$MAC"
 ### Binding and activating the NM profile
 
 ```bash
-nmcli con mod "$PROFILE" \
-    connection.interface-name "$AP" \
-    802-11-wireless.ssid "$SSID" \
-    802-11-wireless.band "$BAND" \
-    802-11-wireless.channel "$CH"
+MODARGS=(connection.interface-name "$AP" 802-11-wireless.band "$BAND" 802-11-wireless.channel "$CH")
+[ -n "$SSID" ] && MODARGS+=(802-11-wireless.ssid "$SSID")
+[ -n "$PASS" ] && MODARGS+=(802-11-wireless-security.key-mgmt wpa-psk 802-11-wireless-security.psk "$PASS")
+nmcli con mod "$PROFILE" "${MODARGS[@]}"
 nmcli con up "$PROFILE"
 ```
 
-- **`nmcli con mod Hotspot ...`** — rewire the existing `Hotspot` profile:
-  - `connection.interface-name ap0` — **bind it to `ap0` by name** (not `wlan0`!). This is the
-    key line that keeps NM off the station interface.
-  - `ssid`, `band`, `channel` — set the broadcast name and **pin the AP to the station's
-    channel/band** computed above.
+- **`MODARGS=(...)`** — a bash **array** holding the `nmcli` settings. Interface, band, and
+  channel are always set. SSID and password are **appended only if provided** (`MODARGS+=(...)`),
+  so an empty value leaves the profile's saved name/password untouched rather than blanking it.
+  Using an array (not a flat string) keeps each value a single argument even if it contains
+  spaces — `"${MODARGS[@]}"` expands to one word per element.
+- **`connection.interface-name ap0`** — **bind the profile to `ap0` by name** (not `wlan0`!).
+  This is the key line that keeps NM off the station interface.
+- **`band` / `channel`** — pin the AP to the station's channel/band computed above.
+- **password** — when set, `key-mgmt wpa-psk` + `psk` together configure WPA2.
 - **`nmcli con up Hotspot`** — activate. NM applies `ipv4.method=shared`: assigns
   `10.42.0.1/24`, spawns dnsmasq, installs NAT (see §2f).
 
@@ -355,24 +383,29 @@ echo "--- result: expect $STATION=managed and $AP=AP on channel $CH ---"
 iw dev | grep -E 'Interface|ssid|type|channel'
 ```
 
-Dump all vifs and filter to the interesting lines. Success = **two** `Interface` blocks,
-`wlan0` still `type managed`, `ap0` `type AP`, **both on the same channel** (see §8).
+Dump all vifs and filter to the interesting lines. Success = **two** `Interface` blocks, the
+station interface still `type managed`, the AP vif `type AP`, **both on the same channel**
+(see §8).
 
 ---
 
 ## 6. Usage examples
 
-All of these elevate to root automatically via the self-re-exec.
+All of these elevate to root automatically via the self-re-exec. `SSID`/password default to
+**keeping the profile's saved values** when not passed.
 
 | Command | Effect |
 |---|---|
-| `hotspotConcurrent.sh` | up, default SSID `Hotspot-Incog` |
-| `hotspotConcurrent.sh up` | up, default SSID |
-| `hotspotConcurrent.sh up "MyNet"` | up, SSID `MyNet` |
-| `hotspotConcurrent.sh up --name "MyNet"` | up, SSID `MyNet` (explicit flag) |
-| `hotspotConcurrent.sh "MyNet"` | up, SSID `MyNet` (bare positional) |
-| `hotspotConcurrent.sh --name "MyNet"` | up, SSID `MyNet` (flag, no `up`) |
-| `hotspotConcurrent.sh down` | tear down `ap0` + profile, leave `wlan0` alone |
+| `hotspotConcurrent.sh` | up, keep saved SSID + password |
+| `hotspotConcurrent.sh up` | up, keep saved SSID + password |
+| `hotspotConcurrent.sh up "MyNet"` | up, set SSID `MyNet`, keep password |
+| `hotspotConcurrent.sh up --name "MyNet"` | up, set SSID `MyNet` (explicit flag) |
+| `hotspotConcurrent.sh "MyNet"` | up, set SSID `MyNet` (bare positional) |
+| `hotspotConcurrent.sh --name "MyNet"` | up, set SSID (flag, no `up`) |
+| `hotspotConcurrent.sh up --pass "secret123"` | up, set password, keep SSID |
+| `hotspotConcurrent.sh up --name "N" --pass "P"` | set both (flags in any order) |
+| `hotspotConcurrent.sh --name=N --pass=P` | set both (`--flag=value` form) |
+| `hotspotConcurrent.sh down` | tear down the AP vif + profile, leave the station alone |
 
 ---
 
@@ -381,8 +414,8 @@ All of these elevate to root automatically via the self-re-exec.
 - **Channel is read once, at activation.** If the **router changes channel** while the hotspot
   is up, `wlan0` follows it but `ap0` stays put — the AP effectively goes **deaf** (now on a
   different channel than the radio's tuner). Fix: **re-run** the script.
-- **`ap0` is not persistent.** It vanishes on **reboot** or an **`mt7615e` module reload**. Re-run
-  after either.
+- **`ap0` is not persistent.** It vanishes on **reboot** or a **wireless driver module reload**.
+  Re-run after either.
 - **Disconnected case = no internet.** If `wlan0` isn't associated, clients get a `10.42.0.x`
   IP but **no internet** until `wlan0` connects to an uplink.
 - **Relies on the driver honoring its advertised combination.** The concurrency is only as good
@@ -402,7 +435,7 @@ Two `Interface` blocks on the one phy, same channel:
 ```
 Interface wlan0
     type managed
-    channel 36 (5180 MHz) ...        ← still on the home SSID (aayush_5G)
+    channel 36 (5180 MHz) ...        ← still on the upstream network
 Interface ap0
     type AP
     channel 36 (5180 MHz) ...        ← AP on the SAME channel

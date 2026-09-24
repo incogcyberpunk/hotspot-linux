@@ -1,5 +1,5 @@
 #!/bin/bash
-# Concurrent AP+STA on MT7663 (mt7615e): add an ap0 vif pinned to wlan0's channel.
+# Concurrent AP+STA on a single-radio Wi-Fi adapter: add an ap0 vif pinned to wlan0's channel.
 # Full rationale + walkthrough: see hotspotConcurrent.md
 #
 #   hotspotConcurrent.sh                              up, keep saved SSID/password
