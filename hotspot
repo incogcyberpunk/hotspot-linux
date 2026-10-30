@@ -2,9 +2,10 @@
 # Concurrent AP+STA on a single-radio Wi-Fi adapter: add an ap0 vif pinned to wlan0's channel.
 # Full rationale + walkthrough: see README.md
 #
-#   hotspot up [--name X] [--pass Y]   bring the hotspot up
-#   hotspot down                        tear it down, leave the Wi-Fi link alone
-#   hotspot [status]                    show status (QR on top, stats below)
+#   hotspot setup [--name X] [--pass Y] [--band 2.4|5]   create/edit the Hotspot profile (asks for missing values)
+#   hotspot up [--name X] [--pass Y]                      bring the hotspot up
+#   hotspot down                                          tear it down, leave the Wi-Fi link alone
+#   hotspot [status]                                      show status (QR on top, stats below)
 set -e
 [ "$EUID" -eq 0 ] || exec sudo -- "$0" "$@"   # re-exec as root if needed
 
@@ -38,18 +39,29 @@ have_profile() { nmcli -g connection.id con show "$PROFILE" >/dev/null 2>&1; }
 # one profile field, "" if unset/missing. `|| true`: a failing $(...) would kill us under set -e
 prof() { nmcli -s -g "$1" con show "$PROFILE" 2>/dev/null || true; }
 
-# flags, in any order (see README.md). Empty = keep the profile's value.
-SSID="" PASS=""
+norm_band() {   # user input -> nmcli band name
+    case ${1,,} in
+        2|2.4|2.4g|2.4ghz|bg) echo bg ;;
+        5|5g|5ghz|a)          echo a ;;
+        *) echo "band must be 2.4 or 5 (got '$1')" >&2; return 1 ;;
+    esac
+}
+band_name()  { case $1 in a) echo "5 GHz" ;; bg) echo "2.4 GHz" ;; *) echo "auto" ;; esac; }
+default_ch() { [ "$1" = a ] && echo 36 || echo 6; }   # safe default channel per band
+
+# flags shared by setup and up, in any order (see README.md). Empty = keep the profile's value.
+SSID="" PASS="" BAND_IN=""
 parse_opts() {
     while [ $# -gt 0 ]; do
         case $1 in
-            --name|--pass|--password)
+            --name|--pass|--password|--band)
                 # without this, a trailing `--name` makes `shift 2` fail -> silent exit under set -e
                 [ $# -ge 2 ] || { echo "$1 needs a value" >&2; exit 1; }
-                case $1 in --name) SSID=$2 ;; *) PASS=$2 ;; esac
+                case $1 in --name) SSID=$2 ;; --band) BAND_IN=$2 ;; *) PASS=$2 ;; esac
                 shift 2 ;;
             --name=*)               SSID=${1#*=}; shift ;;
             --pass=*|--password=*)  PASS=${1#*=}; shift ;;
+            --band=*)               BAND_IN=${1#*=}; shift ;;
             -*)  echo "unknown flag: $1" >&2; exit 1 ;;
             *)   SSID=$1; shift ;;   # bare positional = SSID
         esac
@@ -67,6 +79,59 @@ check_pass() {
 # ---------------------------------------------------------------- subcommands
 
 case $CMD in
+setup)
+    parse_opts "$@"
+    EXISTS="" CUR_SSID="" CUR_BAND=""
+    if have_profile; then
+        EXISTS=1
+        CUR_SSID=$(prof 802-11-wireless.ssid)
+        CUR_BAND=$(prof 802-11-wireless.band)
+    fi
+
+    if [ -t 0 ]; then   # interactive: ask for whatever wasn't passed as a flag (Enter = keep current)
+        [ -n "$SSID" ] || read -rp "network name (SSID)${CUR_SSID:+ [$CUR_SSID]}: " SSID
+        if [ -z "$PASS" ]; then
+            read -rsp "password, 8-63 chars${EXISTS:+ [Enter = keep current]}: " PASS; echo
+            if [ -n "$PASS" ]; then
+                read -rsp "password again: " PASS2; echo
+                [ "$PASS" = "$PASS2" ] || { echo "passwords don't match" >&2; exit 1; }
+            fi
+        fi
+        [ -n "$BAND_IN" ] || read -rp "band, 2.4 or 5 [$(band_name "${CUR_BAND:-bg}")]: " BAND_IN
+    fi
+
+    SSID=${SSID:-$CUR_SSID}
+    BAND=$(norm_band "${BAND_IN:-${CUR_BAND:-bg}}")
+    [ -n "$SSID" ] || { echo "an SSID is required: hotspot setup --name <SSID> --pass <password>" >&2; exit 1; }
+    [ -n "$EXISTS" ] || [ -n "$PASS" ] || { echo "a password is required: hotspot setup --name <SSID> --pass <password>" >&2; exit 1; }
+    check_pass
+    CH=$(default_ch "$BAND")
+
+    ARGS=(802-11-wireless.ssid "$SSID" 802-11-wireless.band "$BAND" 802-11-wireless.channel "$CH")
+    [ -n "$PASS" ] && ARGS+=(802-11-wireless-security.key-mgmt wpa-psk 802-11-wireless-security.psk "$PASS")
+    if [ -n "$EXISTS" ]; then
+        nmcli con mod "$PROFILE" "${ARGS[@]}"
+        echo "updated the '$PROFILE' profile"
+    else
+        # AP mode + NM "shared" (dnsmasq DHCP/DNS + NAT), WPA2-only, bound to ap0 by name,
+        # never autoconnect (ap0 only exists while the hotspot is up)
+        nmcli con add type wifi con-name "$PROFILE" ifname "$AP" autoconnect no \
+            802-11-wireless.mode ap ipv4.method shared ipv6.method disabled \
+            802-11-wireless-security.proto rsn 802-11-wireless-security.pairwise ccmp \
+            802-11-wireless-security.group ccmp "${ARGS[@]}"
+    fi
+
+    echo
+    printf '  %-10s %s\n' "ssid" "$SSID"
+    printf '  %-10s %s\n' "band" "$(band_name "$BAND"), channel $CH"
+    echo
+    echo "note: while $STATION is connected, the hotspot always uses $STATION's channel and band"
+    echo "      (one radio = one channel). The band above is used when $STATION is offline."
+    echo
+    echo "start it with: hotspot up"
+    exit 0
+    ;;
+
 down)
     nmcli con down "$PROFILE" 2>/dev/null || true   # cleanup hygiene: ignore "not active"
     iw dev "$AP" del 2>/dev/null || true            # cleanup hygiene: ignore "no such dev"
@@ -77,6 +142,9 @@ down)
 status)
     if ! have_profile; then
         echo "no hotspot set up yet (no '$PROFILE' NetworkManager profile)"
+        echo
+        echo "create one with:"
+        echo "  hotspot setup"
         exit 0
     fi
     SSID=$(prof 802-11-wireless.ssid)
@@ -98,6 +166,7 @@ status)
     else
         echo "hotspot is down"
         printf '  %-10s %s\n' "ssid" "$SSID"
+        printf '  %-10s %s\n' "band" "$(band_name "$(prof 802-11-wireless.band)") (used when $STATION is offline)"
         echo
         echo "start it with:"
         echo "  hotspot up [--name <SSID>] [--pass <password>]"
@@ -107,7 +176,7 @@ status)
 
 up) : ;;   # fall through to bring-up below
 *)
-    echo "usage: hotspot {up [--name X] [--pass Y] | down | status}" >&2
+    echo "usage: hotspot {setup [--name X] [--pass Y] [--band 2.4|5] | up [--name X] [--pass Y] | down | status}" >&2
     exit 1
     ;;
 esac
@@ -116,6 +185,13 @@ esac
 
 parse_opts "$@"
 check_pass
+[ -z "$BAND_IN" ] || { echo "--band is set with: hotspot setup --band 2.4|5" >&2; exit 1; }
+
+# saved band/channel = the user's choice from setup. Pinning below overwrites them in the
+# profile, so they're put back after activation (restore_pref).
+PREF_BAND=$(prof 802-11-wireless.band)
+PREF_CH=$(prof 802-11-wireless.channel)
+[ "$PREF_CH" != 0 ] || PREF_CH=""   # nmcli shows unset as 0, but only accepts "" to unset
 
 CH=$(iw dev "$STATION" info | awk '/channel/ {print $2}')     # station channel
 FREQ=$(iw dev "$STATION" link | awk '/freq:/ {print $2}')     # station freq (has decimal)
@@ -124,16 +200,24 @@ if [ -n "$CH" ]; then
     # associated: must share the station's channel (single-channel radio)
     [ "${FREQ%%.*}" -ge 5000 ] && BAND=a || BAND=bg      # %%.* strips ".0" -> integer
     echo "$STATION is on channel $CH (${FREQ%%.*} MHz) -> pinning $AP to the same channel, band $BAND"
+    if [ -n "$PREF_BAND" ] && [ "$PREF_BAND" != "$BAND" ]; then
+        echo "note: saved band is $(band_name "$PREF_BAND"), but $AP must follow $STATION -> $(band_name "$BAND") for now"
+    fi
 else
-    # not associated: no uplink, clients get IP but no internet
-    CH=6
-    BAND=bg
+    # not associated: no uplink, clients get IP but no internet. Free to use the saved band.
+    BAND=${PREF_BAND:-bg}
+    CH=${PREF_CH:-$(default_ch "$BAND")}
     echo "$STATION not connected -- creating hotspot without internet on channel $CH, band $BAND"
 fi
 
 # derive a distinct MAC: XOR byte 0 with 0x02 (locally-administered bit)
 BASE=$(cat "/sys/class/net/$STATION/address")
 MAC=$(printf '%02x%s' "$(( 0x${BASE%%:*} ^ 2 ))" "${BASE#??}")
+
+# put the saved band/channel back in the profile; a running hotspot keeps its pinned channel
+restore_pref() {
+    nmcli con mod "$PROFILE" 802-11-wireless.band "$PREF_BAND" 802-11-wireless.channel "$PREF_CH" || true
+}
 
 iw dev "$AP" del 2>/dev/null || true                     # remove stale ap0
 iw dev "$STATION" interface add "$AP" type __ap addr "$MAC"   # second vif in AP mode
@@ -144,6 +228,7 @@ MODARGS=(connection.interface-name "$AP" 802-11-wireless.band "$BAND" 802-11-wir
 [ -n "$PASS" ] && MODARGS+=(802-11-wireless-security.key-mgmt wpa-psk 802-11-wireless-security.psk "$PASS")
 nmcli con mod "$PROFILE" "${MODARGS[@]}"
 nmcli con up "$PROFILE"
+restore_pref
 
 echo "--- result: expect $STATION=managed and $AP=AP on channel $CH ---"
 iw dev | grep -E 'Interface|ssid|type|channel'   # verify two vifs, same channel
