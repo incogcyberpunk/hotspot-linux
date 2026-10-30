@@ -107,8 +107,8 @@ if [ -n "$PASS" ] && { [ "${#PASS}" -lt 8 ] || [ "${#PASS}" -gt 63 ]; }; then
     exit 1
 fi
 
-CH=$(iw dev wlan0 info | awk '/channel/ {print $2}')     # station channel
-FREQ=$(iw dev wlan0 link | awk '/freq:/ {print $2}')     # station freq (has decimal)
+CH=$(iw dev "$STATION" info | awk '/channel/ {print $2}')     # station channel
+FREQ=$(iw dev "$STATION" link | awk '/freq:/ {print $2}')     # station freq (has decimal)
 
 if [ -n "$CH" ]; then
     # associated: must share the station's channel (single-channel radio)
