@@ -218,6 +218,8 @@ MAC=$(printf '%02x%s' "$(( 0x${BASE%%:*} ^ 2 ))" "${BASE#??}")
 restore_pref() {
     nmcli con mod "$PROFILE" 802-11-wireless.band "$PREF_BAND" 802-11-wireless.channel "$PREF_CH" || true
 }
+# any failure from here on: don't leave a half-built ap0 or a rewritten band behind
+trap 'echo "bring-up failed -- removing $AP" >&2; iw dev "$AP" del 2>/dev/null; restore_pref' EXIT
 
 iw dev "$AP" del 2>/dev/null || true                     # remove stale ap0
 iw dev "$STATION" interface add "$AP" type __ap addr "$MAC"   # second vif in AP mode
@@ -228,10 +230,11 @@ MODARGS=(connection.interface-name "$AP" 802-11-wireless.band "$BAND" 802-11-wir
 [ -n "$PASS" ] && MODARGS+=(802-11-wireless-security.key-mgmt wpa-psk 802-11-wireless-security.psk "$PASS")
 nmcli con mod "$PROFILE" "${MODARGS[@]}"
 nmcli con up "$PROFILE"
+trap - EXIT
 restore_pref
 
 echo "--- result: expect $STATION=managed and $AP=AP on channel $CH ---"
-iw dev | grep -E 'Interface|ssid|type|channel'   # verify two vifs, same channel
+iw dev | grep -E 'Interface|ssid|type|channel' || true   # verify two vifs, same channel
 
 # join QR: read the effective SSID/password back from the profile (handles "kept existing")
 QSSID=$(prof 802-11-wireless.ssid)
