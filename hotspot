@@ -127,6 +127,7 @@ setup)
     echo
     echo "note: while $STATION is connected, the hotspot always uses $STATION's channel and band"
     echo "      (one radio = one channel). The band above is used when $STATION is offline."
+    command -v dnsmasq >/dev/null || echo "note: dnsmasq is not installed -- 'hotspot up' needs it (Arch: pacman -S dnsmasq)"
     echo
     echo "start it with: hotspot up"
     exit 0
@@ -186,6 +187,9 @@ esac
 parse_opts "$@"
 check_pass
 [ -z "$BAND_IN" ] || { echo "--band is set with: hotspot setup --band 2.4|5" >&2; exit 1; }
+have_profile || { echo "no '$PROFILE' profile yet -- create it first with: hotspot setup" >&2; exit 1; }
+# ipv4.method=shared makes NM spawn dnsmasq for DHCP/DNS; without it activation fails
+command -v dnsmasq >/dev/null || { echo "dnsmasq is not installed -- NetworkManager needs it for a hotspot (Arch: pacman -S dnsmasq)" >&2; exit 1; }
 
 # saved band/channel = the user's choice from setup. Pinning below overwrites them in the
 # profile, so they're put back after activation (restore_pref).
