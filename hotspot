@@ -89,13 +89,15 @@ PASS=""   # empty = keep whatever the profile already has
 # arg parsing (see README.md): flags in any order
 while [ $# -gt 0 ]; do
     case $1 in
-        --name)     SSID=$2; shift 2 ;;
-        --name=*)   SSID=${1#*=}; shift ;;
-        --pass|--password)  PASS=$2; shift 2 ;;
-        --pass=*)   PASS=${1#*=}; shift ;;
-        --password=*)       PASS=${1#*=}; shift ;;
-        -*)         echo "unknown flag: $1" >&2; exit 1 ;;
-        *)          SSID=$1; shift ;;   # bare positional = SSID
+        --name|--pass|--password)
+            # without this, a trailing `--name` makes `shift 2` fail -> silent exit under set -e
+            [ $# -ge 2 ] || { echo "$1 needs a value" >&2; exit 1; }
+            case $1 in --name) SSID=$2 ;; *) PASS=$2 ;; esac
+            shift 2 ;;
+        --name=*)               SSID=${1#*=}; shift ;;
+        --pass=*|--password=*)  PASS=${1#*=}; shift ;;
+        -*)  echo "unknown flag: $1" >&2; exit 1 ;;
+        *)   SSID=$1; shift ;;   # bare positional = SSID
     esac
 done
 
