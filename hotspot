@@ -19,7 +19,17 @@ CMD=${1:-status}   # no arg = status
 print_qr() {   # $1=ssid $2=pass
     command -v qrencode >/dev/null || return 0
     esc() { printf '%s' "$1" | sed 's/[\\;,:"]/\\&/g'; }
-    qrencode -m 1 -t UTF8 "WIFI:T:WPA;S:$(esc "$1");P:$(esc "$2");;"
+    local data w i
+    data="WIFI:T:WPA;S:$(esc "$1");P:$(esc "$2");;"
+    # UTF8 mode packs 2 module rows per text line, so `-m 1` gets side margins but NO top one
+    # (half a line rounds down to 0): the code's dark top edge blends into the line above.
+    # Draw that 1-module top margin ourselves as a row of ▄, one per module column. The width
+    # comes from the ASCII render (2 chars per module, plain ASCII -> ${#w} is locale-safe).
+    w=$(qrencode -m 1 -t ASCII "$data" | head -n 1)
+    echo
+    for (( i = 0; i < ${#w} / 2; i++ )); do printf '▄'; done
+    echo
+    qrencode -m 1 -t UTF8 "$data"
 }
 
 case $CMD in
