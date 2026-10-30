@@ -245,3 +245,13 @@ QSSID=$(prof 802-11-wireless.ssid)
 QPASS=$(prof 802-11-wireless-security.psk)
 echo "--- scan to join \"$QSSID\" ---"
 print_qr "$QSSID" "$QPASS"
+
+# ufw (default input/forward DROP) blocks hotspot clients' DHCP/DNS and their forwarded traffic;
+# NM's own NAT rules can't override a DROP in another table
+if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q '^Status: active' && ! ufw status | grep -q "$AP"; then
+    echo
+    echo "note: ufw is active with no rules for $AP -- clients won't get an IP or internet. Allow them with:"
+    echo "  sudo ufw allow in on $AP to any port 67 proto udp   # DHCP"
+    echo "  sudo ufw allow in on $AP to any port 53             # DNS"
+    echo "  sudo ufw route allow in on $AP out on $STATION         # internet via $STATION"
+fi
