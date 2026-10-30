@@ -429,14 +429,37 @@ station interface still `type managed`, the AP vif `type AP`, **both on the same
 
 ## 6. Usage examples
 
-The first argument is a **subcommand** — `up`, `down`, or `status` (bare command = `status`).
-All elevate to root automatically via the self-re-exec. On `up`, SSID/password default to
-**keeping the profile's saved values** when not passed.
+### First-time setup on a new machine
+
+The script drives an NM profile named **`Hotspot`**; `up` only edits and activates it, it never
+creates it. On a fresh machine:
+
+1. **Install `dnsmasq`** (`pacman -S dnsmasq`). `ipv4.method=shared` makes NM spawn it for
+   DHCP/DNS (§2f); without it activation fails. `up` checks for it and stops early.
+2. **Create the profile:** `hotspot setup` asks for SSID, password and band (Enter keeps the
+   current value), or pass them as flags: `hotspot setup --name N --pass P --band 2.4|5`.
+   Re-running `setup` edits the existing profile.
+3. **If `ufw` is active**, its default input/forward `DROP` blocks clients' DHCP/DNS and their
+   forwarded traffic (NM's NAT table can't override a drop elsewhere). `up` prints the
+   `ufw allow`/`ufw route allow` rules for `ap0` when none exist.
+
+**The band only applies while `wlan0` is offline.** With an uplink, `ap0` *must* sit on
+`wlan0`'s channel (`#channels <= 1`, §2c), so `up` pins it there and says so if that differs
+from the saved band. The pinned band/channel is written to the profile for activation and the
+saved choice is restored right after (the running AP keeps the pinned channel).
+
+### Commands
+
+The first argument is a **subcommand** — `setup`, `up`, `down`, or `status` (bare command =
+`status`). All elevate to root automatically via the self-re-exec. On `up`, SSID/password
+default to **keeping the profile's saved values** when not passed.
 
 | Command | Effect |
 |---|---|
-| `hotspot` | show status (QR + stats if up; "down" + start hint if not) |
+| `hotspot` | show status (QR + stats if up; "down" + start hint if not; setup hint if no profile) |
 | `hotspot status` | same as bare `hotspot` |
+| `hotspot setup` | create/edit the `Hotspot` profile, asking for SSID, password, band |
+| `hotspot setup --name N --pass P --band 5` | same, non-interactive (any subset of flags) |
 | `hotspot up` | up, keep saved SSID + password |
 | `hotspot up "MyNet"` | up, set SSID `MyNet`, keep password |
 | `hotspot up --name "MyNet"` | up, set SSID `MyNet` (explicit flag) |
@@ -445,8 +468,15 @@ All elevate to root automatically via the self-re-exec. On `up`, SSID/password d
 | `hotspot up --name=N --pass=P` | set both (`--flag=value` form) |
 | `hotspot down` | tear down the AP vif + profile, leave the station alone |
 
-Anything else (`hotspot foo`, a bare `--name`, etc.) prints a usage error — `up` is required
-to start the hotspot; it is no longer implicit.
+Anything else (`hotspot foo`, `--name` with no value, etc.) prints an error — `up` is required
+to start the hotspot; it is no longer implicit. If `up` fails after creating `ap0`, an `EXIT`
+trap deletes `ap0` and restores the saved band, so nothing half-built is left behind.
+
+**QR rendering:** `qrencode -t UTF8` packs two module rows per text line, so `-m 1` yields side
+margins but no top margin (half a line rounds down to 0) and the code's dark top edge merges
+into the line above. `print_qr` prints a blank line plus a row of `▄` (a 1-module light top
+margin) before the code. The QR is already as small as a terminal allows: 1 character per
+module, and its module count depends only on the SSID + password length.
 
 ---
 
@@ -492,4 +522,5 @@ the home network.
 | **Only one `Interface` block** | `iw ... interface add` failed — driver refused the combo, or `ap0` wasn't created (check as root, check `iw list`). |
 | **`ap0` on a *different* channel** than `wlan0` | Channel pinning didn't take, or the router hopped channels after activation → re-run. |
 | **`nmcli con up Hotspot` fails** | Profile bound to the wrong interface, band/channel mismatch, or `ap0` not present yet. Re-check `connection.interface-name ap0` and that `ap0` exists. |
+| **`No suitable device found ... wlan0 ... mismatching interface name`** | `con up` ran before NM had finished taking over the new `ap0` (it was still `unavailable`, so NM only reported why `wlan0` doesn't fit). The script now waits for `ap0` to reach NM state 30 (`disconnected`) first. |
 | **Clients get `10.42.0.x` but no internet** | `wlan0` not associated (disconnected branch), so NAT has no uplink — connect `wlan0` first. |
