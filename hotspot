@@ -15,7 +15,9 @@ PROFILE=Hotspot
 CMD=${1:-status}   # no arg = status
 [ $# -gt 0 ] && shift
 
-# --- shared: print the join QR for the profile's effective SSID/password ---
+# ---------------------------------------------------------------- shared helpers
+
+# print the join QR for an SSID/password
 print_qr() {   # $1=ssid $2=pass
     command -v qrencode >/dev/null || return 0
     esc() { printf '%s' "$1" | sed 's/[\\;,:"]/\\&/g'; }
@@ -35,6 +37,34 @@ print_qr() {   # $1=ssid $2=pass
 have_profile() { nmcli -g connection.id con show "$PROFILE" >/dev/null 2>&1; }
 # one profile field, "" if unset/missing. `|| true`: a failing $(...) would kill us under set -e
 prof() { nmcli -s -g "$1" con show "$PROFILE" 2>/dev/null || true; }
+
+# flags, in any order (see README.md). Empty = keep the profile's value.
+SSID="" PASS=""
+parse_opts() {
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --name|--pass|--password)
+                # without this, a trailing `--name` makes `shift 2` fail -> silent exit under set -e
+                [ $# -ge 2 ] || { echo "$1 needs a value" >&2; exit 1; }
+                case $1 in --name) SSID=$2 ;; *) PASS=$2 ;; esac
+                shift 2 ;;
+            --name=*)               SSID=${1#*=}; shift ;;
+            --pass=*|--password=*)  PASS=${1#*=}; shift ;;
+            -*)  echo "unknown flag: $1" >&2; exit 1 ;;
+            *)   SSID=$1; shift ;;   # bare positional = SSID
+        esac
+    done
+}
+
+# WPA2-PSK requires 8-63 chars; fail early with a clear message rather than a cryptic nmcli error
+check_pass() {
+    if [ -n "$PASS" ] && { [ "${#PASS}" -lt 8 ] || [ "${#PASS}" -gt 63 ]; }; then
+        echo "password must be 8-63 characters (got ${#PASS})" >&2
+        exit 1
+    fi
+}
+
+# ---------------------------------------------------------------- subcommands
 
 case $CMD in
 down)
@@ -82,30 +112,10 @@ up) : ;;   # fall through to bring-up below
     ;;
 esac
 
-# ---- bring-up (CMD = up) ----
-SSID=""   # empty = keep whatever the profile already has
-PASS=""   # empty = keep whatever the profile already has
+# ---------------------------------------------------------------- bring-up (CMD = up)
 
-# arg parsing (see README.md): flags in any order
-while [ $# -gt 0 ]; do
-    case $1 in
-        --name|--pass|--password)
-            # without this, a trailing `--name` makes `shift 2` fail -> silent exit under set -e
-            [ $# -ge 2 ] || { echo "$1 needs a value" >&2; exit 1; }
-            case $1 in --name) SSID=$2 ;; *) PASS=$2 ;; esac
-            shift 2 ;;
-        --name=*)               SSID=${1#*=}; shift ;;
-        --pass=*|--password=*)  PASS=${1#*=}; shift ;;
-        -*)  echo "unknown flag: $1" >&2; exit 1 ;;
-        *)   SSID=$1; shift ;;   # bare positional = SSID
-    esac
-done
-
-# WPA2-PSK requires 8-63 chars; fail early with a clear message rather than a cryptic nmcli error
-if [ -n "$PASS" ] && { [ "${#PASS}" -lt 8 ] || [ "${#PASS}" -gt 63 ]; }; then
-    echo "password must be 8-63 characters (got ${#PASS})" >&2
-    exit 1
-fi
+parse_opts "$@"
+check_pass
 
 CH=$(iw dev "$STATION" info | awk '/channel/ {print $2}')     # station channel
 FREQ=$(iw dev "$STATION" link | awk '/freq:/ {print $2}')     # station freq (has decimal)
@@ -139,7 +149,7 @@ echo "--- result: expect $STATION=managed and $AP=AP on channel $CH ---"
 iw dev | grep -E 'Interface|ssid|type|channel'   # verify two vifs, same channel
 
 # join QR: read the effective SSID/password back from the profile (handles "kept existing")
-QSSID=$(nmcli -g 802-11-wireless.ssid con show "$PROFILE")
-QPASS=$(nmcli -s -g 802-11-wireless-security.psk con show "$PROFILE")
+QSSID=$(prof 802-11-wireless.ssid)
+QPASS=$(prof 802-11-wireless-security.psk)
 echo "--- scan to join \"$QSSID\" ---"
 print_qr "$QSSID" "$QPASS"
