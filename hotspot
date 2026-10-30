@@ -233,6 +233,17 @@ MODARGS=(connection.interface-name "$AP" 802-11-wireless.band "$BAND" 802-11-wir
 [ -n "$SSID" ] && MODARGS+=(802-11-wireless.ssid "$SSID")
 [ -n "$PASS" ] && MODARGS+=(802-11-wireless-security.key-mgmt wpa-psk 802-11-wireless-security.psk "$PASS")
 nmcli con mod "$PROFILE" "${MODARGS[@]}"
+
+# NM needs ~100 ms to take over a new interface (attach wpa_supplicant). `con up` before that
+# fails with a misleading "No suitable device found ... wlan0 ... mismatching interface name".
+# Wait for ap0's NM state to reach 30 (disconnected = ready); 10 = unmanaged, 20 = unavailable.
+for (( i = 0; i < 100; i++ )); do   # up to 10 s
+    NMSTATE=$(nmcli -g GENERAL.STATE dev show "$AP" 2>/dev/null) || NMSTATE=""
+    [ "${NMSTATE%% *}" -ge 30 ] 2>/dev/null && break
+    sleep 0.1
+done
+[ "${NMSTATE%% *}" -ge 30 ] 2>/dev/null || { echo "NetworkManager didn't take over $AP within 10 s (state: ${NMSTATE:-unknown})" >&2; exit 1; }
+
 nmcli con up "$PROFILE"
 trap - EXIT
 restore_pref
